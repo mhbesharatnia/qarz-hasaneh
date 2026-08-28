@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>صندوق قرض‌الحسنه</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar no-print">
+      <a class="brand" href="#/">
+        <div class="brand-mark">ق‌ح</div>
+        <div>
+          <h1>صندوق قرض‌الحسنه</h1>
+          <p>پروتوتایپ ثبت وام، اقساط و تسویه</p>
+        </div>
+      </a>
+      <div class="actions" style="margin:0">
+        <button class="btn btn-ghost" id="btn-backup">خروجی پشتیبان</button>
+        <button class="btn btn-ghost" id="btn-restore">بازیابی</button>
+        <input type="file" id="restore-file" accept="application/json" hidden />
+        <a class="btn btn-primary" href="#/new">ثبت وام جدید</a>
+      </div>
+    </header>
+    <main id="view"></main>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="modal-bg" id="modal"></div>
+
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>
