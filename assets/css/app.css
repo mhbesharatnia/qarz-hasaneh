@@ -79,8 +79,22 @@ button, input, select, textarea { font-family: inherit; }
 .btn-sm { padding: 7px 12px; font-size: 0.85rem; }
 
 .grid { display: grid; gap: 16px; }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+.jdate {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 0.8fr;
+  gap: 8px;
+}
+.jdate select { min-width: 0; }
+.jtime {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
 
 .stat {
   background: var(--card);
@@ -159,7 +173,7 @@ button, input, select, textarea { font-family: inherit; }
 label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; }
 .field { margin-bottom: 14px; }
 input[type="text"], input[type="number"], input[type="tel"], input[type="date"],
-input[type="datetime-local"], select, textarea {
+input[type="datetime-local"], input[type="time"], select, textarea {
   width: 100%;
   border: 1px solid var(--line);
   background: #fff;
@@ -253,7 +267,7 @@ th { color: var(--muted); font-weight: 700; }
 }
 
 @media (max-width: 860px) {
-  .grid-3, .grid-2 { grid-template-columns: 1fr; }
+  .grid-4, .grid-3, .grid-2, .jdate { grid-template-columns: 1fr; }
   .topbar { flex-direction: column; align-items: stretch; }
 }
 

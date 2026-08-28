@@ -137,33 +137,148 @@
     return { gy, gm, gd: d + 1 };
   }
 
+  const JMONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"];
+
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+
   function parseISO(iso) {
     const [y, m, d] = iso.split("-").map(Number);
     return { y, m, d };
   }
 
+  function jalaliLeap(jy) {
+    const g = j2g(jy, 12, 30);
+    const back = g2j(g.gy, g.gm, g.gd);
+    return back.jy === jy && back.jm === 12 && back.jd === 30;
+  }
+
+  function jalaliMonthLength(jy, jm) {
+    if (jm <= 6) return 31;
+    if (jm <= 11) return 30;
+    return jalaliLeap(jy) ? 30 : 29;
+  }
+
+  function jalaliToIso(jy, jm, jd) {
+    const g = j2g(Number(jy), Number(jm), Number(jd));
+    return `${g.gy}-${pad2(g.gm)}-${pad2(g.gd)}`;
+  }
+
+  function isoToParts(iso) {
+    if (!iso) return null;
+    const { y, m, d } = parseISO(iso.slice(0, 10));
+    return g2j(y, m, d);
+  }
+
+  function todayParts() {
+    const t = new Date();
+    return g2j(t.getFullYear(), t.getMonth() + 1, t.getDate());
+  }
+
   function isoToJalali(iso) {
     if (!iso) return "—";
-    const { y, m, d } = parseISO(iso.slice(0, 10));
-    const j = g2j(y, m, d);
-    return faDigits(`${j.jy}/${String(j.jm).padStart(2, "0")}/${String(j.jd).padStart(2, "0")}`);
+    const j = isoToParts(iso);
+    if (!j) return "—";
+    return faDigits(`${j.jy}/${pad2(j.jm)}/${pad2(j.jd)}`);
   }
 
   function todayISO() {
     const t = new Date();
-    return t.toISOString().slice(0, 10);
+    return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
   }
 
-  function addMonthsISO(iso, n) {
+  function nowTime() {
+    const t = new Date();
+    return `${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+  }
+
+  function addJalaliMonths(iso, n) {
     const { y, m, d } = parseISO(iso);
-    const dt = new Date(Date.UTC(y, m - 1 + n, d));
-    return dt.toISOString().slice(0, 10);
+    const j = g2j(y, m, d);
+    let jm = j.jm - 1 + n;
+    let jy = j.jy + Math.floor(jm / 12);
+    jm = ((jm % 12) + 12) % 12;
+    const jd = Math.min(j.jd, jalaliMonthLength(jy, jm + 1));
+    return jalaliToIso(jy, jm + 1, jd);
   }
 
   function daysBetween(a, b) {
     const da = new Date(a + "T00:00:00");
     const db = new Date(b + "T00:00:00");
     return Math.floor((db - da) / 86400000);
+  }
+
+  function formatPayAt(at) {
+    if (!at) return "—";
+    const [date, time] = at.split("T");
+    const clock = (time || "").slice(0, 5);
+    return isoToJalali(date) + (clock ? "، ساعت " + faDigits(clock) : "");
+  }
+
+  function feeOf(amount, percent) {
+    return Math.round(Number(amount || 0) * (Number(percent) || 0) / 100);
+  }
+
+  function jdateSelects(iso, attrs) {
+    const now = todayParts();
+    const j = iso ? isoToParts(iso) : null;
+    const y0 = j ? j.jy : "";
+    const m0 = j ? j.jm : "";
+    const d0 = j ? j.jd : "";
+    const minY = now.jy - 90;
+    const maxY = now.jy + 10;
+    let years = `<option value="">سال</option>`;
+    for (let y = maxY; y >= minY; y--) {
+      years += `<option value="${y}" ${y0 === y ? "selected" : ""}>${faDigits(y)}</option>`;
+    }
+    let months = `<option value="">ماه</option>`;
+    JMONTHS.forEach((name, i) => {
+      months += `<option value="${i + 1}" ${m0 === i + 1 ? "selected" : ""}>${name}</option>`;
+    });
+    const dim = y0 && m0 ? jalaliMonthLength(y0, m0) : 31;
+    let days = `<option value="">روز</option>`;
+    for (let d = 1; d <= dim; d++) {
+      days += `<option value="${d}" ${d0 === d ? "selected" : ""}>${faDigits(d)}</option>`;
+    }
+    return `<div class="jdate" ${attrs}>
+      <select data-jp="y">${years}</select>
+      <select data-jp="m">${months}</select>
+      <select data-jp="d">${days}</select>
+    </div>`;
+  }
+
+  function readJdate(el) {
+    const y = Number(el.querySelector('[data-jp="y"]').value);
+    const m = Number(el.querySelector('[data-jp="m"]').value);
+    const d = Number(el.querySelector('[data-jp="d"]').value);
+    if (!y || !m || !d) return "";
+    return jalaliToIso(y, m, Math.min(d, jalaliMonthLength(y, m)));
+  }
+
+  function refreshJdateDays(el) {
+    const y = Number(el.querySelector('[data-jp="y"]').value);
+    const m = Number(el.querySelector('[data-jp="m"]').value);
+    const dSel = el.querySelector('[data-jp="d"]');
+    const cur = Number(dSel.value);
+    const max = y && m ? jalaliMonthLength(y, m) : 31;
+    let html = `<option value="">روز</option>`;
+    for (let d = 1; d <= max; d++) {
+      html += `<option value="${d}" ${cur === d ? "selected" : ""}>${faDigits(d)}</option>`;
+    }
+    dSel.innerHTML = html;
+    if (cur > max) dSel.value = String(max);
+  }
+
+  function bindJdates(root, onChange) {
+    root.querySelectorAll(".jdate").forEach((el) => {
+      el.querySelectorAll("select").forEach((sel) => {
+        sel.onchange = () => {
+          refreshJdateDays(el);
+          onChange(el, readJdate(el));
+        };
+      });
+    });
   }
 
   function buildInstallments(amount, months, startDate) {
@@ -173,7 +288,7 @@
     for (let i = 0; i < months; i++) {
       rows.push({
         n: i + 1,
-        dueDate: addMonthsISO(startDate, i),
+        dueDate: addJalaliMonths(startDate, i),
         amount: base + (i === months - 1 ? rem : 0),
         payments: [],
       });
@@ -289,7 +404,7 @@
                   return `<div class="loan-row" data-id="${l.id}">
                     <div>
                       <b>${escapeHtml(titleOf(l.recipient))}</b>
-                      <div class="hint">مبلغ ${toFa(l.amount)} تومان · ${faDigits(l.months)} قسط · ضمانت: ${l.guarantee.type === "check" ? "چک" : "سفته"}</div>
+                      <div class="hint">مبلغ ${toFa(l.amount)} تومان · کارمزد ${toFa(l.feePercent || 0)}٪ · ${faDigits(l.months)} قسط · ضمانت: ${l.guarantee.type === "check" ? "چک" : "سفته"}</div>
                     </div>
                     <span class="badge badge-${st}">${label}</span>
                   </div>`;
@@ -322,6 +437,7 @@
       guarantee: { type: "check", received: false, number: "", bank: "", note: "" },
       amount: "",
       months: "",
+      feePercent: "0",
       firstDue: todayISO(),
     };
   }
@@ -340,7 +456,7 @@
           </select>
         </div>
         <div class="field"><label>کد ملی</label><input ${req} data-p="${prefix}" data-k="nationalId" value="${escapeHtml(p.nationalId)}" /></div>
-        <div class="field"><label>تاریخ تولد</label><input type="date" data-p="${prefix}" data-k="birthDate" value="${escapeHtml(p.birthDate)}" /></div>
+        <div class="field"><label>تاریخ تولد</label>${jdateSelects(p.birthDate, `data-p="${prefix}" data-k="birthDate"`)}</div>
         <div class="field"><label>موبایل</label><input type="tel" ${req} data-p="${prefix}" data-k="mobile" value="${escapeHtml(p.mobile)}" /></div>
         <div class="field"><label>تلفن ثابت</label><input type="tel" data-p="${prefix}" data-k="phone" value="${escapeHtml(p.phone)}" /></div>
         <div class="field"><label>شغل</label><input data-p="${prefix}" data-k="job" value="${escapeHtml(p.job)}" /></div>
@@ -372,6 +488,7 @@
 
   function bindDraft(root) {
     root.querySelectorAll("[data-p]").forEach((el) => {
+      if (el.classList.contains("jdate")) return;
       el.oninput = el.onchange = () => {
         state.draft[el.dataset.p][el.dataset.k] = el.value;
       };
@@ -383,12 +500,20 @@
       };
     });
     root.querySelectorAll("[data-loan]").forEach((el) => {
+      if (el.classList.contains("jdate")) return;
       el.oninput = () => {
         state.draft[el.dataset.loan] = el.value;
-        if (el.dataset.loan === "amount" || el.dataset.loan === "months" || el.dataset.loan === "firstDue") {
+        if (el.dataset.loan === "amount" || el.dataset.loan === "months" || el.dataset.loan === "feePercent") {
           refreshPreview();
         }
       };
+    });
+    bindJdates(root, (el, iso) => {
+      if (el.dataset.p && el.dataset.k) state.draft[el.dataset.p][el.dataset.k] = iso;
+      if (el.dataset.loan) {
+        state.draft[el.dataset.loan] = iso;
+        if (el.dataset.loan === "firstDue") refreshPreview();
+      }
     });
     root.querySelectorAll("[data-doc]").forEach((el) => {
       el.onchange = async () => {
@@ -405,10 +530,16 @@
   function previewTable() {
     const amount = Number(state.draft.amount);
     const months = Number(state.draft.months);
+    const feePercent = Number(state.draft.feePercent) || 0;
+    const fee = feeOf(amount, feePercent);
     if (!amount || !months || months < 1) return `<p class="hint">مبلغ وام و تعداد ماه را وارد کنید تا جدول اقساط ساخته شود.</p>`;
     const rows = buildInstallments(amount, months, state.draft.firstDue || todayISO());
-    return `<div class="table-wrap"><table>
-      <thead><tr><th>قسط</th><th>سررسید</th><th>مبلغ (تومان)</th></tr></thead>
+    return `
+    <div class="alert alert-gold">
+      <p>کارمزد ${toFa(feePercent)}٪ = ${toFa(fee)} تومان ${feePercent ? "· این مبلغ جدا از اقساط اصل وام است" : "· پیش‌فرض صفر است"}</p>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>قسط</th><th>سررسید شمسی</th><th>مبلغ (تومان)</th></tr></thead>
       <tbody>${rows
         .map((r) => `<tr><td>${faDigits(r.n)}</td><td>${isoToJalali(r.dueDate)}</td><td>${toFa(r.amount)}</td></tr>`)
         .join("")}</tbody>
@@ -431,18 +562,21 @@
     const months = Number(state.draft.months);
     if (!amount || !months) return toast("ابتدا مبلغ و تعداد ماه را مشخص کنید");
     const rows = buildInstallments(amount, months, state.draft.firstDue || todayISO());
-    downloadExcel(fullName(state.draft.recipient) || "وام", amount, months, rows);
+    downloadExcel(fullName(state.draft.recipient) || "وام", amount, months, rows, false, state.draft.feePercent);
   }
 
-  function downloadExcel(name, amount, months, rows, paymentsMap) {
+  function downloadExcel(name, amount, months, rows, paymentsMap, feePercent) {
     if (!window.XLSX) return toast("کتابخانه اکسل بارگذاری نشد");
+    const fee = feeOf(amount, feePercent);
     const data = [
       ["صندوق قرض‌الحسنه — جدول اقساط"],
       ["دریافت‌کننده", name],
       ["مبلغ وام (تومان)", amount],
+      ["کارمزد (درصد)", Number(feePercent) || 0],
+      ["مبلغ کارمزد (تومان)", fee],
       ["تعداد اقساط", months],
       [],
-      ["شماره قسط", "تاریخ سررسید (شمسی)", "مبلغ قسط", "پرداخت‌شده", "مانده", "وضعیت"],
+      ["شماره قسط", "تاریخ سررسید شمسی", "مبلغ قسط", "پرداخت‌شده", "مانده", "وضعیت"],
     ];
     rows.forEach((r) => {
       const paid = paymentsMap ? paidOf(r) : 0;
@@ -517,12 +651,13 @@
     } else {
       body = `
         <h2 class="section-title">مبلغ وام و بازپرداخت</h2>
-        <div class="grid grid-3">
+        <div class="grid grid-2">
           <div class="field"><label>مبلغ وام (تومان)</label><input type="number" min="1" data-loan="amount" value="${escapeHtml(d.amount)}" /></div>
           <div class="field"><label>تعداد ماه بازپرداخت</label><input type="number" min="1" data-loan="months" value="${escapeHtml(d.months)}" /></div>
-          <div class="field"><label>تاریخ سررسید قسط اول</label><input type="date" data-loan="firstDue" value="${escapeHtml(d.firstDue)}" /></div>
+          <div class="field"><label>کارمزد (درصد)</label><input type="number" min="0" step="0.1" data-loan="feePercent" value="${escapeHtml(d.feePercent)}" /></div>
+          <div class="field"><label>تاریخ سررسید قسط اول (شمسی)</label>${jdateSelects(d.firstDue, `data-loan="firstDue"`)}</div>
         </div>
-        <p class="hint">با تعیین مبلغ و تعداد ماه، تاریخ سررسید و مبلغ هر قسط محاسبه می‌شود. باقی‌مانده تقسیم روی قسط آخر می‌نشیند.</p>
+        <p class="hint">تاریخ‌ها شمسی است. با تعیین مبلغ و تعداد ماه، سررسید هر قسط ماه‌به‌ماه شمسی محاسبه می‌شود. کارمزد پیش‌فرض صفر است و جدا از اصل اقساط نمایش داده می‌شود.</p>
         <div id="inst-preview">${previewTable()}</div>
       `;
     }
@@ -579,6 +714,7 @@
       toast("تایید دریافت ضمانت لازم است");
       return;
     }
+    const feePercent = Number(d.feePercent) || 0;
     const loan = {
       id: uid(),
       createdAt: new Date().toISOString(),
@@ -588,6 +724,8 @@
       docs: d.docs,
       guarantee: { ...d.guarantee },
       amount,
+      feePercent,
+      feeAmount: feeOf(amount, feePercent),
       months,
       firstDue: d.firstDue,
       installments: buildInstallments(amount, months, d.firstDue),
@@ -605,7 +743,7 @@
     return `<div class="card">
       <h3 class="section-title">${title}</h3>
       <p><b>${escapeHtml(titleOf(p))}</b> فرزند ${escapeHtml(p.fatherName || "—")} · کد ملی ${faDigits(p.nationalId || "—")}</p>
-      <p class="hint">${escapeHtml(p.job || "")} ${p.workplace ? "— " + escapeHtml(p.workplace) : ""}</p>
+      <p class="hint">تاریخ تولد: ${isoToJalali(p.birthDate)} · ${escapeHtml(p.job || "")} ${p.workplace ? "— " + escapeHtml(p.workplace) : ""}</p>
       <p>نشانی: ${escapeHtml(p.address || "—")}</p>
       <div class="phones">${phonesOf(p).map((x) => `<span class="chip">${faDigits(x)}</span>`).join("")}</div>
       <div class="preview" style="margin-top:12px">
@@ -649,8 +787,9 @@
           ${settled ? `<a class="btn btn-primary" href="#/letter/${loan.id}">نامه تسویه</a>` : ""}
           <button class="btn btn-danger" id="del-loan">حذف پرونده</button>
         </div>
-        <div class="grid grid-3" style="margin:16px 0">
+        <div class="grid grid-4" style="margin:16px 0">
           <div class="stat"><span>مبلغ وام</span><b>${toFa(loan.amount)}</b></div>
+          <div class="stat"><span>کارمزد</span><b>${toFa(loan.feePercent || 0)}٪</b><span>${toFa(loan.feeAmount || feeOf(loan.amount, loan.feePercent))} تومان</span></div>
           <div class="stat"><span>تعداد اقساط</span><b>${toFa(loan.months)}</b></div>
           <div class="stat"><span>ضمانت</span><b>${loan.guarantee.type === "check" ? "چک" : "سفته"} ${loan.guarantee.received ? "دریافت شد" : ""}</b></div>
         </div>
@@ -699,7 +838,7 @@
       </div>
     `;
     document.getElementById("excel-loan").onclick = () =>
-      downloadExcel(fullName(loan.recipient), loan.amount, loan.months, loan.installments, true);
+      downloadExcel(fullName(loan.recipient), loan.amount, loan.months, loan.installments, true, loan.feePercent);
     document.getElementById("del-loan").onclick = () => {
       if (!confirm("این پرونده حذف شود؟")) return;
       state.loans = state.loans.filter((x) => x.id !== loan.id);
@@ -724,7 +863,7 @@
           (p) => `<tr>
             <td>${faDigits(p.n)}</td>
             <td>${toFa(p.amount)}</td>
-            <td>${faDigits((p.at || "").replace("T", " ").slice(0, 16))}</td>
+            <td>${formatPayAt(p.at)}</td>
             <td>${escapeHtml(methodLabel(p.method))}</td>
             <td>${faDigits(p.tracking || "—")}</td>
             <td>${p.receipt ? filePreview(p.receipt) : "—"}</td>
@@ -756,7 +895,8 @@
       <h3>ثبت واریز قسط ${faDigits(n)}</h3>
       <p class="hint">مانده این قسط: ${toFa(remain)} تومان</p>
       <div class="field"><label>مبلغ واریزی (تومان)</label><input type="number" id="p-amount" value="${remain}" /></div>
-      <div class="field"><label>زمان واریز</label><input type="datetime-local" id="p-at" /></div>
+      <div class="field"><label>تاریخ واریز (شمسی)</label>${jdateSelects(todayISO(), 'id="p-jdate"')}</div>
+      <div class="field"><label>ساعت واریز</label><input type="time" id="p-time" value="${nowTime()}" /></div>
       <div class="field"><label>روش واریز</label>
         <select id="p-method">
           <option value="card">کارت به کارت</option>
@@ -777,9 +917,7 @@
         <button class="btn btn-ghost" id="p-cancel">بستن</button>
       </div>
     </div>`;
-    const now = new Date();
-    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    document.getElementById("p-at").value = now.toISOString().slice(0, 16);
+    bindJdates(modalEl, () => {});
     let receipt = null;
     document.getElementById("p-receipt").onchange = async (e) => {
       receipt = await fileToData(e.target.files[0]);
@@ -792,9 +930,11 @@
     document.getElementById("p-save").onclick = () => {
       const amount = Number(document.getElementById("p-amount").value);
       if (!amount) return toast("مبلغ واریز را وارد کنید");
+      const payDate = readJdate(document.getElementById("p-jdate"));
+      const payTime = document.getElementById("p-time").value || nowTime();
       inst.payments.push({
         amount,
-        at: document.getElementById("p-at").value,
+        at: (payDate || todayISO()) + "T" + payTime,
         method: document.getElementById("p-method").value,
         tracking: document.getElementById("p-track").value.trim(),
         receipt,
@@ -835,7 +975,7 @@
       <article class="letter">
         <div class="meta"><span>صندوق قرض‌الحسنه</span><span>تاریخ: ${today}</span></div>
         <h2>نامه تایید تسویه اقساط</h2>
-        <p>بدین‌وسیله تایید می‌گردد که ${escapeHtml(titleOf(loan.recipient))} فرزند ${escapeHtml(loan.recipient.fatherName || "—")} به شماره ملی ${faDigits(loan.recipient.nationalId || "—")} تمامی اقساط وام به مبلغ ${toFa(loan.amount)} تومان را در ${faDigits(loan.months)} قسط به‌طور کامل پرداخت و تسویه نموده است.</p>
+        <p>بدین‌وسیله تایید می‌گردد که ${escapeHtml(titleOf(loan.recipient))} فرزند ${escapeHtml(loan.recipient.fatherName || "—")} به شماره ملی ${faDigits(loan.recipient.nationalId || "—")} تمامی اقساط وام به مبلغ ${toFa(loan.amount)} تومان${loan.feePercent ? ` با کارمزد ${toFa(loan.feePercent)}٪ معادل ${toFa(loan.feeAmount || feeOf(loan.amount, loan.feePercent))} تومان` : ""} را در ${faDigits(loan.months)} قسط به‌طور کامل پرداخت و تسویه نموده است.</p>
         <p>با توجه به پایان تعهدات نام‌برده، به <b>مدیر حسابداری</b> اعلام می‌گردد که ${g} ایشان به شماره ${faDigits(loan.guarantee.number || "—")} ${loan.guarantee.bank ? "نزد " + escapeHtml(loan.guarantee.bank) : ""} <b>عودت گردد</b>.</p>
         <p>این نامه پس از ثبت آخرین واریز در سامانه صندوق صادر شده و به منزله مفاصاحساب اقساط است.</p>
         <div class="sign-row">
