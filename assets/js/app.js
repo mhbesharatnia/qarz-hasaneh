@@ -1,5 +1,6 @@
 (() => {
   const KEY = "qarz-fund-v1";
+  const ARVAN_KEY = "qarz-arvan-v1";
   const view = document.getElementById("view");
   const toastEl = document.getElementById("toast");
   const modalEl = document.getElementById("modal");
@@ -40,6 +41,7 @@
 
   function save() {
     localStorage.setItem(KEY, JSON.stringify(state.loans));
+    queueArvanBackup();
   }
 
   function uid() {
@@ -221,63 +223,112 @@
   }
 
   function jdateSelects(iso, attrs) {
-    const now = todayParts();
-    const j = iso ? isoToParts(iso) : null;
-    const y0 = j ? j.jy : "";
-    const m0 = j ? j.jm : "";
-    const d0 = j ? j.jd : "";
-    const minY = now.jy - 90;
-    const maxY = now.jy + 10;
-    let years = `<option value="">سال</option>`;
-    for (let y = maxY; y >= minY; y--) {
-      years += `<option value="${y}" ${y0 === y ? "selected" : ""}>${faDigits(y)}</option>`;
-    }
-    let months = `<option value="">ماه</option>`;
-    JMONTHS.forEach((name, i) => {
-      months += `<option value="${i + 1}" ${m0 === i + 1 ? "selected" : ""}>${name}</option>`;
-    });
-    const dim = y0 && m0 ? jalaliMonthLength(y0, m0) : 31;
-    let days = `<option value="">روز</option>`;
-    for (let d = 1; d <= dim; d++) {
-      days += `<option value="${d}" ${d0 === d ? "selected" : ""}>${faDigits(d)}</option>`;
-    }
-    return `<div class="jdate" ${attrs}>
-      <select data-jp="y">${years}</select>
-      <select data-jp="m">${months}</select>
-      <select data-jp="d">${days}</select>
+    const label = iso ? isoToJalali(iso) : "— / — / —";
+    return `<div class="jdate" ${attrs} data-iso="${iso || ""}">
+      <button type="button" class="jdate-btn" data-jopen>
+        <span class="jdate-val">${label}</span>
+        <span class="jdate-hint">تقویم شمسی</span>
+      </button>
+      <div class="jcal"></div>
     </div>`;
   }
 
   function readJdate(el) {
-    const y = Number(el.querySelector('[data-jp="y"]').value);
-    const m = Number(el.querySelector('[data-jp="m"]').value);
-    const d = Number(el.querySelector('[data-jp="d"]').value);
-    if (!y || !m || !d) return "";
-    return jalaliToIso(y, m, Math.min(d, jalaliMonthLength(y, m)));
+    return (el && el.dataset.iso) || "";
   }
 
-  function refreshJdateDays(el) {
-    const y = Number(el.querySelector('[data-jp="y"]').value);
-    const m = Number(el.querySelector('[data-jp="m"]').value);
-    const dSel = el.querySelector('[data-jp="d"]');
-    const cur = Number(dSel.value);
-    const max = y && m ? jalaliMonthLength(y, m) : 31;
-    let html = `<option value="">روز</option>`;
-    for (let d = 1; d <= max; d++) {
-      html += `<option value="${d}" ${cur === d ? "selected" : ""}>${faDigits(d)}</option>`;
+  function weekdayIran(jy, jm, jd) {
+    const g = j2g(jy, jm, jd);
+    return (new Date(g.gy, g.gm - 1, g.gd).getDay() + 1) % 7;
+  }
+
+  function closeAllJdates() {
+    document.querySelectorAll(".jdate.open").forEach((el) => el.classList.remove("open"));
+  }
+
+  function paintJcal(wrap) {
+    const cal = wrap.querySelector(".jcal");
+    const sel = wrap.dataset.iso ? isoToParts(wrap.dataset.iso) : null;
+    const now = todayParts();
+    const jy = wrap._jy || (sel ? sel.jy : now.jy);
+    const jm = wrap._jm || (sel ? sel.jm : now.jm);
+    wrap._jy = jy;
+    wrap._jm = jm;
+    const dim = jalaliMonthLength(jy, jm);
+    const start = weekdayIran(jy, jm, 1);
+    const JDAYS = ["ش", "ی", "د", "س", "چ", "پ", "ج"];
+    let days = "";
+    for (let i = 0; i < start; i++) days += `<button type="button" class="mute" disabled></button>`;
+    for (let d = 1; d <= dim; d++) {
+      const on = sel && sel.jy === jy && sel.jm === jm && sel.jd === d ? "on" : "";
+      days += `<button type="button" data-jd="${d}" class="${on}">${faDigits(d)}</button>`;
     }
-    dSel.innerHTML = html;
-    if (cur > max) dSel.value = String(max);
+    cal.innerHTML = `
+      <div class="jcal-head">
+        <button type="button" class="jcal-nav" data-jnav="-1">‹</button>
+        <b>${JMONTHS[jm - 1]} ${faDigits(jy)}</b>
+        <button type="button" class="jcal-nav" data-jnav="1">›</button>
+      </div>
+      <div class="jcal-week">${JDAYS.map((d) => `<span>${d}</span>`).join("")}</div>
+      <div class="jcal-days">${days}</div>
+      <div class="jcal-foot">
+        <button type="button" class="btn btn-sm btn-ghost" data-jtoday>امروز</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-jclear>پاک کردن</button>
+      </div>
+    `;
+  }
+
+  function applyJdate(wrap, iso, onChange) {
+    wrap.dataset.iso = iso || "";
+    wrap.querySelector(".jdate-val").textContent = iso ? isoToJalali(iso) : "— / — / —";
+    wrap.classList.remove("open");
+    onChange(wrap, iso || "");
   }
 
   function bindJdates(root, onChange) {
-    root.querySelectorAll(".jdate").forEach((el) => {
-      el.querySelectorAll("select").forEach((sel) => {
-        sel.onchange = () => {
-          refreshJdateDays(el);
-          onChange(el, readJdate(el));
-        };
-      });
+    root.querySelectorAll(".jdate").forEach((wrap) => {
+      wrap.querySelector("[data-jopen]").onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const wasOpen = wrap.classList.contains("open");
+        closeAllJdates();
+        if (wasOpen) return;
+        const cur = wrap.dataset.iso ? isoToParts(wrap.dataset.iso) : todayParts();
+        wrap._jy = cur.jy;
+        wrap._jm = cur.jm;
+        paintJcal(wrap);
+        wrap.classList.add("open");
+      };
+      wrap.querySelector(".jcal").onclick = (e) => {
+        e.stopPropagation();
+        const nav = e.target.closest("[data-jnav]");
+        if (nav) {
+          let m = wrap._jm + Number(nav.dataset.jnav);
+          let y = wrap._jy;
+          if (m > 12) {
+            m = 1;
+            y++;
+          }
+          if (m < 1) {
+            m = 12;
+            y--;
+          }
+          wrap._jy = y;
+          wrap._jm = m;
+          paintJcal(wrap);
+          return;
+        }
+        if (e.target.closest("[data-jtoday]")) {
+          applyJdate(wrap, todayISO(), onChange);
+          return;
+        }
+        if (e.target.closest("[data-jclear]")) {
+          applyJdate(wrap, "", onChange);
+          return;
+        }
+        const dayBtn = e.target.closest("[data-jd]");
+        if (dayBtn) applyJdate(wrap, jalaliToIso(wrap._jy, wrap._jm, Number(dayBtn.dataset.jd)), onChange);
+      };
     });
   }
 
@@ -321,20 +372,31 @@
 
   async function fileToData(file) {
     if (!file) return null;
-    return new Promise((res, rej) => {
+    const rec = await new Promise((res, rej) => {
       const r = new FileReader();
-      r.onload = () =>
-        res({ name: file.name, type: file.type, data: r.result, size: file.size });
+      r.onload = () => res({ name: file.name, type: file.type, data: r.result, size: file.size });
       r.onerror = rej;
       r.readAsDataURL(file);
     });
+    const cfg = arvanCfg();
+    if (arvanReady(cfg)) {
+      try {
+        const key = `${cfg.prefix.replace(/\/$/, "")}/files/${Date.now()}-${safeName(file.name)}`;
+        rec.arvanKey = await arvanPut(cfg, key, dataUrlToBlob(rec.data), rec.type || "application/octet-stream");
+        rec.arvanUrl = arvanObjectUrl(cfg, rec.arvanKey);
+      } catch (err) {
+        toast("آپلود به آروان ناموفق بود؛ فایل در مرورگر ماند");
+      }
+    }
+    return rec;
   }
 
   function filePreview(file) {
     if (!file) return "";
-    if (file.type && file.type.startsWith("image/")) {
+    if (file.type && file.type.startsWith("image/") && file.data) {
       return `<img src="${file.data}" alt="${escapeHtml(file.name)}" />`;
     }
+    if (file.arvanKey) return `<div class="file-chip">آروان: ${escapeHtml(file.name || file.arvanKey)}</div>`;
     return `<div class="file-chip">${escapeHtml(file.name)}</div>`;
   }
 
@@ -342,10 +404,188 @@
   function route() {
     const hash = location.hash.replace(/^#/, "") || "/";
     const parts = hash.split("/").filter(Boolean);
+    if (parts[0] === "settings") return renderSettings();
     if (parts[0] === "new") return renderNew();
     if (parts[0] === "loan" && parts[1]) return renderLoan(parts[1]);
     if (parts[0] === "letter" && parts[1]) return renderLetter(parts[1]);
     return renderHome();
+  }
+
+  /* ---- Arvan Object Storage (S3) ---- */
+  function arvanDefaults() {
+    return {
+      enabled: false,
+      endpoint: "https://s3.ir-thr-at1.arvanstorage.ir",
+      region: "ir-thr-at1",
+      bucket: "",
+      accessKey: "",
+      secretKey: "",
+      prefix: "qarz-fund",
+    };
+  }
+
+  function arvanCfg() {
+    try {
+      return { ...arvanDefaults(), ...JSON.parse(localStorage.getItem(ARVAN_KEY) || "{}") };
+    } catch {
+      return arvanDefaults();
+    }
+  }
+
+  function arvanReady(cfg = arvanCfg()) {
+    return !!(cfg.enabled && cfg.endpoint && cfg.bucket && cfg.accessKey && cfg.secretKey);
+  }
+
+  function safeName(name) {
+    return String(name || "file").replace(/[^\w.\-()\u0600-\u06FF]+/g, "_").slice(0, 80);
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const [head, body] = String(dataUrl).split(",");
+    const mime = (head.match(/:(.*?);/) || [])[1] || "application/octet-stream";
+    const bin = atob(body || "");
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  function arvanObjectUrl(cfg, key) {
+    const base = cfg.endpoint.replace(/\/$/, "");
+    return `${base}/${cfg.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  }
+
+  async function sha256Hex(data) {
+    const buf = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    const hash = await crypto.subtle.digest("SHA-256", buf);
+    return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function hmacSha256(key, data) {
+    const rawKey = typeof key === "string" ? new TextEncoder().encode(key) : key;
+    const cryptoKey = await crypto.subtle.importKey("raw", rawKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const payload = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, payload));
+  }
+
+  async function awsSigningKey(secret, dateStamp, region, service) {
+    const kDate = await hmacSha256("AWS4" + secret, dateStamp);
+    const kRegion = await hmacSha256(kDate, region);
+    const kService = await hmacSha256(kRegion, service);
+    return hmacSha256(kService, "aws4_request");
+  }
+
+  function toHex(bytes) {
+    return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function amzNow() {
+    const iso = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+    return { amzDate: iso, dateStamp: iso.slice(0, 8) };
+  }
+
+  async function arvanPut(cfg, key, blob, contentType) {
+    const host = new URL(cfg.endpoint).host;
+    const path = `/${cfg.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
+    const url = `${cfg.endpoint.replace(/\/$/, "")}${path}`;
+    const { amzDate, dateStamp } = amzNow();
+    const buf = await blob.arrayBuffer();
+    const payloadHash = await sha256Hex(buf);
+    const ctype = contentType || blob.type || "application/octet-stream";
+    const canonicalHeaders = `content-type:${ctype}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date";
+    const canonicalRequest = ["PUT", path, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
+    const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
+    const sig = toHex(await hmacSha256(await awsSigningKey(cfg.secretKey, dateStamp, cfg.region, "s3"), stringToSign));
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `AWS4-HMAC-SHA256 Credential=${cfg.accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`,
+        "Content-Type": ctype,
+        "x-amz-content-sha256": payloadHash,
+        "x-amz-date": amzDate,
+      },
+        body: buf,
+    });
+    if (!res.ok) throw new Error(`آروان ${res.status}: ${(await res.text()).slice(0, 180)}`);
+    return key;
+  }
+
+  let arvanBackupTimer = 0;
+  function queueArvanBackup() {
+    const cfg = arvanCfg();
+    if (!arvanReady(cfg)) return;
+    clearTimeout(arvanBackupTimer);
+    arvanBackupTimer = setTimeout(() => {
+      pushArvanBackup(cfg).catch((err) => toast("بکاپ آروان: " + err.message));
+    }, 700);
+  }
+
+  async function pushArvanBackup(cfg = arvanCfg()) {
+    if (!arvanReady(cfg)) throw new Error("اتصال آروان کامل نیست");
+    const body = new Blob([JSON.stringify({ savedAt: new Date().toISOString(), loans: state.loans })], {
+      type: "application/json",
+    });
+    const prefix = cfg.prefix.replace(/\/$/, "") || "qarz-fund";
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    await arvanPut(cfg, `${prefix}/backups/latest.json`, body, "application/json");
+    await arvanPut(cfg, `${prefix}/backups/${stamp}.json`, body, "application/json");
+  }
+
+  function renderSettings() {
+    const c = arvanCfg();
+    view.innerHTML = `
+      <div class="card">
+        <h2 class="section-title">اتصال به فضای ابری آروان</h2>
+        <p class="hint">کلیدها فقط در مرورگر شما ذخیره می‌شوند. در پنل آروان روی باکت، CORS را برای همین صفحه باز کنید (متدهای GET و PUT و هدر Authorization و Content-Type).</p>
+        <div class="field" style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="a-on" ${c.enabled ? "checked" : ""} />
+          <label for="a-on" style="margin:0">فعال باشد: فایل‌ها و بکاپ خودکار به آروان بروند</label>
+        </div>
+        <div class="grid grid-2">
+          <div class="field"><label>Endpoint</label><input id="a-ep" value="${escapeHtml(c.endpoint)}" /></div>
+          <div class="field"><label>Region</label><input id="a-rg" value="${escapeHtml(c.region)}" /></div>
+          <div class="field"><label>نام باکت</label><input id="a-bk" value="${escapeHtml(c.bucket)}" /></div>
+          <div class="field"><label>پوشه (prefix)</label><input id="a-px" value="${escapeHtml(c.prefix)}" /></div>
+          <div class="field"><label>Access Key</label><input id="a-ak" value="${escapeHtml(c.accessKey)}" autocomplete="off" /></div>
+          <div class="field"><label>Secret Key</label><input id="a-sk" type="password" value="${escapeHtml(c.secretKey)}" autocomplete="off" /></div>
+        </div>
+        <p class="hint">نمونه Endpoint تهران: <code>https://s3.ir-thr-at1.arvanstorage.ir</code> — اگر امضا رد شد Region را روی <code>us-east-1</code> بگذارید.</p>
+        <p class="hint">CORS باکت باید origin صفحه را مجاز کند، مثلاً <code>https://mhbesharatnia.github.io</code> با متد PUT و هدرهای <code>*</code>.</p>
+        <div class="actions">
+          <button class="btn btn-primary" id="a-save">ذخیره تنظیمات</button>
+          <button class="btn btn-gold" id="a-test">تست و ارسال بکاپ الان</button>
+          <a class="btn btn-ghost" href="#/">بازگشت</a>
+        </div>
+        <p class="hint" id="a-status">${arvanReady(c) ? "تنظیمات کامل است." : "هنوز کلید یا باکت وارد نشده."}</p>
+      </div>
+    `;
+    document.getElementById("a-save").onclick = () => {
+      const next = {
+        enabled: document.getElementById("a-on").checked,
+        endpoint: document.getElementById("a-ep").value.trim().replace(/\/$/, ""),
+        region: document.getElementById("a-rg").value.trim() || "ir-thr-at1",
+        bucket: document.getElementById("a-bk").value.trim(),
+        prefix: document.getElementById("a-px").value.trim() || "qarz-fund",
+        accessKey: document.getElementById("a-ak").value.trim(),
+        secretKey: document.getElementById("a-sk").value,
+      };
+      localStorage.setItem(ARVAN_KEY, JSON.stringify(next));
+      toast("تنظیمات آروان ذخیره شد");
+      renderSettings();
+    };
+    document.getElementById("a-test").onclick = async () => {
+      document.getElementById("a-save").click();
+      const cfg = arvanCfg();
+      if (!arvanReady(cfg)) return toast("ابتدا اتصال را کامل کنید");
+      try {
+        await pushArvanBackup(cfg);
+        toast("بکاپ روی آروان ذخیره شد");
+        document.getElementById("a-status").textContent = "اتصال برقرار است. فایل latest.json در پوشه backups نوشته شد.";
+      } catch (err) {
+        toast(err.message);
+      }
+    };
   }
 
   window.addEventListener("hashchange", route);
@@ -1010,6 +1250,10 @@
       toast("فایل پشتیبان نامعتبر است");
     }
   };
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".jdate")) closeAllJdates();
+  });
 
   route();
 })();

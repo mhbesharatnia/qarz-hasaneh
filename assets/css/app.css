@@ -84,16 +84,79 @@ button, input, select, textarea { font-family: inherit; }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 
 .jdate {
-  display: grid;
-  grid-template-columns: 1.1fr 1.4fr 0.8fr;
-  gap: 8px;
+  position: relative;
 }
-.jdate select { min-width: 0; }
-.jtime {
-  display: grid;
-  grid-template-columns: 1fr auto;
+.jdate-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  text-align: right;
+}
+.jdate-btn:hover, .jdate.open .jdate-btn { border-color: var(--teal); }
+.jdate-val { font-weight: 700; }
+.jdate-hint { color: var(--muted); font-size: 0.78rem; }
+.jcal {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: min(320px, 92vw);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+.jdate.open .jcal { display: block; }
+.jcal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  align-items: end;
+  margin-bottom: 10px;
+}
+.jcal-head b { font-size: 0.95rem; }
+.jcal-nav {
+  border: 0;
+  background: var(--teal-soft);
+  color: var(--teal-deep);
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 800;
+}
+.jcal-week, .jcal-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  text-align: center;
+}
+.jcal-week span { font-size: 0.75rem; color: var(--muted); padding: 4px 0; }
+.jcal-days button {
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
+  padding: 8px 0;
+  cursor: pointer;
+  font: inherit;
+}
+.jcal-days button:hover { background: var(--gold-soft); }
+.jcal-days button.on { background: var(--teal); color: #fff; font-weight: 800; }
+.jcal-days button.mute { opacity: 0.25; cursor: default; }
+.jcal-foot {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .stat {
@@ -267,7 +330,7 @@ th { color: var(--muted); font-weight: 700; }
 }
 
 @media (max-width: 860px) {
-  .grid-4, .grid-3, .grid-2, .jdate { grid-template-columns: 1fr; }
+  .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
   .topbar { flex-direction: column; align-items: stretch; }
 }
 
