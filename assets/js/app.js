@@ -26,23 +26,49 @@
   });
 
   const state = {
-    loans: load(),
+    loans: [],
+    rev: 0,
+    deletedIds: [],
+    lastSeenRev: 0,
     draft: null,
     step: 0,
   };
 
-  function load() {
+  function loadStore() {
     try {
-      return JSON.parse(localStorage.getItem(KEY) || "[]");
+      const raw = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (!raw) return;
+      if (Array.isArray(raw)) {
+        state.loans = raw;
+        return;
+      }
+      state.loans = raw.loans || [];
+      state.rev = Number(raw.rev) || 0;
+      state.deletedIds = raw.deletedIds || [];
+      state.lastSeenRev = state.rev;
     } catch {
-      return [];
+      /* empty */
     }
   }
 
-  function save() {
-    localStorage.setItem(KEY, JSON.stringify(state.loans));
-    queueArvanBackup();
+  function persistLocal() {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({ loans: state.loans, rev: state.rev, deletedIds: state.deletedIds })
+    );
   }
+
+  function touchLoan(loan) {
+    if (loan) loan.updatedAt = new Date().toISOString();
+  }
+
+  function save() {
+    state.rev += 1;
+    persistLocal();
+    queueArvanPush();
+  }
+
+  loadStore();
 
   function uid() {
     return "L" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -383,7 +409,7 @@
       try {
         const key = `${cfg.prefix.replace(/\/$/, "")}/files/${Date.now()}-${safeName(file.name)}`;
         rec.arvanKey = await arvanPut(cfg, key, dataUrlToBlob(rec.data), rec.type || "application/octet-stream");
-        rec.arvanUrl = arvanObjectUrl(cfg, rec.arvanKey);
+        delete rec.data;
       } catch (err) {
         toast("آپلود به آروان ناموفق بود؛ فایل در مرورگر ماند");
       }
@@ -396,7 +422,10 @@
     if (file.type && file.type.startsWith("image/") && file.data) {
       return `<img src="${file.data}" alt="${escapeHtml(file.name)}" />`;
     }
-    if (file.arvanKey) return `<div class="file-chip">آروان: ${escapeHtml(file.name || file.arvanKey)}</div>`;
+    if (file.arvanKey) {
+      const kind = file.type && file.type.startsWith("image/") ? "image" : "file";
+      return `<span class="file-chip arvan-preview" data-arvan-key="${escapeHtml(file.arvanKey)}" data-arvan-name="${escapeHtml(file.name || "")}" data-arvan-kind="${kind}">در حال دریافت از آروان…</span>`;
+    }
     return `<div class="file-chip">${escapeHtml(file.name)}</div>`;
   }
 
@@ -404,14 +433,25 @@
   function route() {
     const hash = location.hash.replace(/^#/, "") || "/";
     const parts = hash.split("/").filter(Boolean);
-    if (parts[0] === "settings") return renderSettings();
-    if (parts[0] === "new") return renderNew();
-    if (parts[0] === "loan" && parts[1]) return renderLoan(parts[1]);
-    if (parts[0] === "letter" && parts[1]) return renderLetter(parts[1]);
-    return renderHome();
+    if (parts[0] === "settings") renderSettings();
+    else if (parts[0] === "new") renderNew();
+    else if (parts[0] === "loan" && parts[1]) renderLoan(parts[1]);
+    else if (parts[0] === "letter" && parts[1]) renderLetter(parts[1]);
+    else renderHome();
+    refreshSyncPill();
+    hydrateArvanPreviews(view);
   }
 
-  /* ---- Arvan Object Storage (S3) ---- */
+  function refreshIfIdle() {
+    if (state.draft) return;
+    if (modalEl.classList.contains("show")) return;
+    route();
+  }
+
+  /* ---- Arvan Object Storage (private, signed) ---- */
+  const SHARE_KIND = "qarz-arvan-share";
+  const blobUrlCache = {};
+
   function arvanDefaults() {
     return {
       enabled: false,
@@ -436,6 +476,10 @@
     return !!(cfg.enabled && cfg.endpoint && cfg.bucket && cfg.accessKey && cfg.secretKey);
   }
 
+  function dataKey(cfg = arvanCfg()) {
+    return `${(cfg.prefix || "qarz-fund").replace(/\/$/, "")}/shared/state.json`;
+  }
+
   function safeName(name) {
     return String(name || "file").replace(/[^\w.\-()\u0600-\u06FF]+/g, "_").slice(0, 80);
   }
@@ -449,9 +493,27 @@
     return new Blob([arr], { type: mime });
   }
 
-  function arvanObjectUrl(cfg, key) {
-    const base = cfg.endpoint.replace(/\/$/, "");
-    return `${base}/${cfg.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  function stripFileData(loans) {
+    const clone = JSON.parse(JSON.stringify(loans));
+    const walk = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (node.arvanKey && node.data) delete node.data;
+      Object.values(node).forEach(walk);
+    };
+    walk(clone);
+    return clone;
+  }
+
+  function mergeStores(localLoans, remoteLoans, deletedIds) {
+    const gone = new Set(deletedIds || []);
+    const map = new Map();
+    [...(remoteLoans || []), ...(localLoans || [])].forEach((loan) => {
+      if (!loan || !loan.id || gone.has(loan.id)) return;
+      const prev = map.get(loan.id);
+      if (!prev || (loan.updatedAt || "") >= (prev.updatedAt || "")) map.set(loan.id, loan);
+    });
+    return [...map.values()];
   }
 
   async function sha256Hex(data) {
@@ -483,64 +545,239 @@
     return { amzDate: iso, dateStamp: iso.slice(0, 8) };
   }
 
-  async function arvanPut(cfg, key, blob, contentType) {
+  async function arvanRequest(cfg, method, key, blob, contentType) {
     const host = new URL(cfg.endpoint).host;
     const path = `/${cfg.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
     const url = `${cfg.endpoint.replace(/\/$/, "")}${path}`;
     const { amzDate, dateStamp } = amzNow();
-    const buf = await blob.arrayBuffer();
-    const payloadHash = await sha256Hex(buf);
-    const ctype = contentType || blob.type || "application/octet-stream";
-    const canonicalHeaders = `content-type:${ctype}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
-    const signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date";
-    const canonicalRequest = ["PUT", path, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const isPut = method === "PUT";
+    const buf = isPut ? await blob.arrayBuffer() : null;
+    const payloadHash = isPut ? await sha256Hex(buf) : await sha256Hex("");
+    const ctype = isPut ? contentType || blob.type || "application/octet-stream" : "";
+    const headerMap = { host, "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate };
+    if (isPut) headerMap["content-type"] = ctype;
+    const signedHeaders = Object.keys(headerMap).sort().join(";");
+    const canonicalHeaders = Object.keys(headerMap)
+      .sort()
+      .map((k) => `${k}:${headerMap[k]}\n`)
+      .join("");
+    const canonicalRequest = [method, path, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
     const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
     const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
     const sig = toHex(await hmacSha256(await awsSigningKey(cfg.secretKey, dateStamp, cfg.region, "s3"), stringToSign));
-    const res = await fetch(url, {
-      method: "PUT",
-      headers: {
-        Authorization: `AWS4-HMAC-SHA256 Credential=${cfg.accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`,
-        "Content-Type": ctype,
-        "x-amz-content-sha256": payloadHash,
-        "x-amz-date": amzDate,
-      },
-        body: buf,
-    });
+    const headers = {
+      Authorization: `AWS4-HMAC-SHA256 Credential=${cfg.accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    };
+    if (isPut) headers["Content-Type"] = ctype;
+    const res = await fetch(url, { method, headers, body: isPut ? buf : undefined });
+    return res;
+  }
+
+  async function arvanPut(cfg, key, blob, contentType) {
+    const res = await arvanRequest(cfg, "PUT", key, blob, contentType);
     if (!res.ok) throw new Error(`آروان ${res.status}: ${(await res.text()).slice(0, 180)}`);
     return key;
   }
 
-  let arvanBackupTimer = 0;
-  function queueArvanBackup() {
-    const cfg = arvanCfg();
-    if (!arvanReady(cfg)) return;
-    clearTimeout(arvanBackupTimer);
-    arvanBackupTimer = setTimeout(() => {
-      pushArvanBackup(cfg).catch((err) => toast("بکاپ آروان: " + err.message));
-    }, 700);
+  async function arvanGet(cfg, key) {
+    const res = await arvanRequest(cfg, "GET", key);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`آروان ${res.status}: ${(await res.text()).slice(0, 180)}`);
+    return res;
   }
 
-  async function pushArvanBackup(cfg = arvanCfg()) {
+  function refreshSyncPill() {
+    const pill = document.getElementById("sync-pill");
+    const btn = document.getElementById("btn-sync");
+    const on = arvanReady();
+    if (pill) {
+      pill.hidden = !on;
+      pill.textContent = on ? "همگام با آروان (خصوصی)" : "";
+    }
+    if (btn) btn.hidden = !on;
+  }
+
+  async function hydrateArvanPreviews(root = document) {
+    if (!arvanReady()) return;
+    const cfg = arvanCfg();
+    const nodes = [...root.querySelectorAll("[data-arvan-key]")];
+    await Promise.all(
+      nodes.map(async (el) => {
+        const key = el.dataset.arvanKey;
+        if (!key) return;
+        try {
+          if (!blobUrlCache[key]) {
+            const res = await arvanGet(cfg, key);
+            if (!res) return;
+            blobUrlCache[key] = URL.createObjectURL(await res.blob());
+          }
+          if (el.dataset.arvanKind === "image" || el.tagName === "IMG") {
+            const img = document.createElement("img");
+            img.src = blobUrlCache[key];
+            img.alt = el.dataset.arvanName || "";
+            el.replaceWith(img);
+          } else {
+            el.textContent = el.dataset.arvanName || "فایل آروان";
+            el.onclick = () => window.open(blobUrlCache[key], "_blank");
+            el.style.cursor = "pointer";
+          }
+        } catch {
+          el.textContent = "دریافت فایل ناموفق";
+        }
+      })
+    );
+  }
+
+  let arvanPushTimer = 0;
+  let arvanPullTimer = 0;
+  let arvanBusy = false;
+
+  function queueArvanPush() {
+    const cfg = arvanCfg();
+    if (!arvanReady(cfg)) return;
+    clearTimeout(arvanPushTimer);
+    arvanPushTimer = setTimeout(() => {
+      pushSharedState(cfg).catch((err) => toast("همگام‌سازی آروان: " + err.message));
+    }, 600);
+  }
+
+  async function waitArvanIdle() {
+    for (let i = 0; i < 40 && arvanBusy; i++) await new Promise((r) => setTimeout(r, 80));
+  }
+
+  async function pullSharedState(cfg = arvanCfg(), { silent } = {}) {
+    if (!arvanReady(cfg)) return false;
+    await waitArvanIdle();
+    if (arvanBusy) return false;
+    arvanBusy = true;
+    try {
+      const res = await arvanGet(cfg, dataKey(cfg));
+      if (!res) return false;
+      const remote = JSON.parse(await res.text());
+      if (!remote || !Array.isArray(remote.loans)) return false;
+      const remoteRev = Number(remote.rev) || 0;
+      if (remoteRev <= state.lastSeenRev && remoteRev <= state.rev) return false;
+      state.deletedIds = [...new Set([...(state.deletedIds || []), ...(remote.deletedIds || [])])];
+      state.loans = mergeStores(state.loans, remote.loans, state.deletedIds);
+      state.rev = Math.max(state.rev, remoteRev);
+      state.lastSeenRev = remoteRev;
+      persistLocal();
+      if (!silent) toast("تغییرات مشترک از آروان آمد");
+      return true;
+    } finally {
+      arvanBusy = false;
+    }
+  }
+
+  async function pushSharedState(cfg = arvanCfg()) {
     if (!arvanReady(cfg)) throw new Error("اتصال آروان کامل نیست");
-    const body = new Blob([JSON.stringify({ savedAt: new Date().toISOString(), loans: state.loans })], {
-      type: "application/json",
-    });
-    const prefix = cfg.prefix.replace(/\/$/, "") || "qarz-fund";
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    await arvanPut(cfg, `${prefix}/backups/latest.json`, body, "application/json");
-    await arvanPut(cfg, `${prefix}/backups/${stamp}.json`, body, "application/json");
+    await waitArvanIdle();
+    await pullSharedState(cfg, { silent: true });
+    await waitArvanIdle();
+    arvanBusy = true;
+    try {
+      const payload = {
+        kind: "qarz-shared-state",
+        rev: state.rev,
+        updatedAt: new Date().toISOString(),
+        deletedIds: state.deletedIds || [],
+        loans: stripFileData(state.loans),
+      };
+      await arvanPut(cfg, dataKey(cfg), new Blob([JSON.stringify(payload)], { type: "application/json" }), "application/json");
+      state.lastSeenRev = state.rev;
+      persistLocal();
+    } finally {
+      arvanBusy = false;
+    }
+  }
+
+  function startArvanLoop() {
+    clearInterval(arvanPullTimer);
+    refreshSyncPill();
+    if (!arvanReady()) return;
+    pullSharedState(arvanCfg(), { silent: true })
+      .then((changed) => {
+        if (changed) refreshIfIdle();
+      })
+      .catch(() => {});
+    arvanPullTimer = setInterval(async () => {
+      try {
+        const changed = await pullSharedState(arvanCfg(), { silent: true });
+        if (changed) refreshIfIdle();
+      } catch {
+        /* keep polling */
+      }
+    }, 12000);
+  }
+
+  function readSettingsForm() {
+    return {
+      enabled: document.getElementById("a-on").checked,
+      endpoint: document.getElementById("a-ep").value.trim().replace(/\/$/, ""),
+      region: document.getElementById("a-rg").value.trim() || "ir-thr-at1",
+      bucket: document.getElementById("a-bk").value.trim(),
+      prefix: document.getElementById("a-px").value.trim() || "qarz-fund",
+      accessKey: document.getElementById("a-ak").value.trim(),
+      secretKey: document.getElementById("a-sk").value,
+    };
+  }
+
+  function exportShareFile(cfg = arvanCfg()) {
+    if (!cfg.accessKey || !cfg.secretKey || !cfg.bucket) return toast("اول اتصال را ذخیره کنید");
+    const share = {
+      kind: SHARE_KIND,
+      v: 1,
+      endpoint: cfg.endpoint,
+      region: cfg.region,
+      bucket: cfg.bucket,
+      prefix: cfg.prefix,
+      accessKey: cfg.accessKey,
+      secretKey: cfg.secretKey,
+    };
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(share, null, 2)], { type: "application/json" }));
+    a.download = "qarz-arvan-share.json";
+    a.click();
+    toast("فایل اتصال آماده است؛ فقط به همکارتان بدهید");
+  }
+
+  async function importShareFile(file) {
+    const data = JSON.parse(await file.text());
+    if (data.kind !== SHARE_KIND || !data.accessKey || !data.bucket) throw new Error("bad");
+    const next = {
+      ...arvanDefaults(),
+      enabled: true,
+      endpoint: data.endpoint || arvanDefaults().endpoint,
+      region: data.region || "ir-thr-at1",
+      bucket: data.bucket,
+      prefix: data.prefix || "qarz-fund",
+      accessKey: data.accessKey,
+      secretKey: data.secretKey,
+    };
+    localStorage.setItem(ARVAN_KEY, JSON.stringify(next));
+    toast("به صندوق مشترک وصل شدید");
+    startArvanLoop();
+    try {
+      const changed = await pullSharedState(next);
+      if (!changed && state.loans.length) await pushSharedState(next);
+    } catch (err) {
+      toast(err.message);
+    }
+    route();
   }
 
   function renderSettings() {
     const c = arvanCfg();
     view.innerHTML = `
       <div class="card">
-        <h2 class="section-title">اتصال به فضای ابری آروان</h2>
-        <p class="hint">کلیدها فقط در مرورگر شما ذخیره می‌شوند. در پنل آروان روی باکت، CORS را برای همین صفحه باز کنید (متدهای GET و PUT و هدر Authorization و Content-Type).</p>
+        <h2 class="section-title">اتصال مشترک به آروان</h2>
+        <p>باکت را <b>خصوصی</b> بگذارید. فایل‌ها و پرونده‌ها فقط با کلید امضاشده خوانده می‌شوند؛ لینک عمومی لازم نیست.</p>
+        <p class="hint">بعد از وصل شدن، «خروجی اتصال» بگیرید و همان فایل را به همکارتان بدهید تا هر دو به یک صندوق وصل شوید و تغییرات همدیگر را ببینید.</p>
         <div class="field" style="display:flex;align-items:center;gap:8px">
           <input type="checkbox" id="a-on" ${c.enabled ? "checked" : ""} />
-          <label for="a-on" style="margin:0">فعال باشد: فایل‌ها و بکاپ خودکار به آروان بروند</label>
+          <label for="a-on" style="margin:0">این مرورگر به صندوق مشترک وصل باشد</label>
         </div>
         <div class="grid grid-2">
           <div class="field"><label>Endpoint</label><input id="a-ep" value="${escapeHtml(c.endpoint)}" /></div>
@@ -550,40 +787,47 @@
           <div class="field"><label>Access Key</label><input id="a-ak" value="${escapeHtml(c.accessKey)}" autocomplete="off" /></div>
           <div class="field"><label>Secret Key</label><input id="a-sk" type="password" value="${escapeHtml(c.secretKey)}" autocomplete="off" /></div>
         </div>
-        <p class="hint">نمونه Endpoint تهران: <code>https://s3.ir-thr-at1.arvanstorage.ir</code> — اگر امضا رد شد Region را روی <code>us-east-1</code> بگذارید.</p>
-        <p class="hint">CORS باکت باید origin صفحه را مجاز کند، مثلاً <code>https://mhbesharatnia.github.io</code> با متد PUT و هدرهای <code>*</code>.</p>
+        <p class="hint">نمونه Endpoint تهران: <code>https://s3.ir-thr-at1.arvanstorage.ir</code> — اگر امضا رد شد Region را <code>us-east-1</code> بگذارید.</p>
+        <p class="hint">در CORS باکت، origin همین صفحه را با متدهای GET و PUT و هدر <code>*</code> مجاز کنید. باکت را public نکنید.</p>
         <div class="actions">
-          <button class="btn btn-primary" id="a-save">ذخیره تنظیمات</button>
-          <button class="btn btn-gold" id="a-test">تست و ارسال بکاپ الان</button>
+          <button class="btn btn-primary" id="a-save">ذخیره و همگام‌سازی</button>
+          <button class="btn btn-gold" id="a-export">خروجی اتصال برای همکار</button>
+          <button class="btn btn-ghost" id="a-import">ورود فایل اتصال</button>
+          <input type="file" id="a-import-file" accept="application/json" hidden />
           <a class="btn btn-ghost" href="#/">بازگشت</a>
         </div>
-        <p class="hint" id="a-status">${arvanReady(c) ? "تنظیمات کامل است." : "هنوز کلید یا باکت وارد نشده."}</p>
+        <p class="hint" id="a-status">${arvanReady(c) ? "وصل هستید. هر ۱۲ ثانیه تغییرات همکار خوانده می‌شود." : "هنوز وصل نیست."}</p>
       </div>
     `;
-    document.getElementById("a-save").onclick = () => {
-      const next = {
-        enabled: document.getElementById("a-on").checked,
-        endpoint: document.getElementById("a-ep").value.trim().replace(/\/$/, ""),
-        region: document.getElementById("a-rg").value.trim() || "ir-thr-at1",
-        bucket: document.getElementById("a-bk").value.trim(),
-        prefix: document.getElementById("a-px").value.trim() || "qarz-fund",
-        accessKey: document.getElementById("a-ak").value.trim(),
-        secretKey: document.getElementById("a-sk").value,
-      };
+    document.getElementById("a-save").onclick = async () => {
+      const next = readSettingsForm();
       localStorage.setItem(ARVAN_KEY, JSON.stringify(next));
-      toast("تنظیمات آروان ذخیره شد");
-      renderSettings();
-    };
-    document.getElementById("a-test").onclick = async () => {
-      document.getElementById("a-save").click();
-      const cfg = arvanCfg();
-      if (!arvanReady(cfg)) return toast("ابتدا اتصال را کامل کنید");
+      toast("تنظیمات ذخیره شد");
+      startArvanLoop();
       try {
-        await pushArvanBackup(cfg);
-        toast("بکاپ روی آروان ذخیره شد");
-        document.getElementById("a-status").textContent = "اتصال برقرار است. فایل latest.json در پوشه backups نوشته شد.";
+        if (arvanReady(next)) {
+          const changed = await pullSharedState(next);
+          if (!changed && state.loans.length) await pushSharedState(next);
+          document.getElementById("a-status").textContent = "وصل شدید. خروجی اتصال را به همکارتان بدهید.";
+        }
       } catch (err) {
         toast(err.message);
+      }
+      refreshSyncPill();
+    };
+    document.getElementById("a-export").onclick = () => {
+      const next = readSettingsForm();
+      localStorage.setItem(ARVAN_KEY, JSON.stringify(next));
+      exportShareFile(next);
+    };
+    document.getElementById("a-import").onclick = () => document.getElementById("a-import-file").click();
+    document.getElementById("a-import-file").onchange = async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        await importShareFile(f);
+      } catch {
+        toast("فایل اتصال نامعتبر است");
       }
     };
   }
@@ -970,6 +1214,7 @@
       firstDue: d.firstDue,
       installments: buildInstallments(amount, months, d.firstDue),
     };
+    touchLoan(loan);
     state.loans.unshift(loan);
     save();
     state.draft = null;
@@ -1081,6 +1326,7 @@
       downloadExcel(fullName(loan.recipient), loan.amount, loan.months, loan.installments, true, loan.feePercent);
     document.getElementById("del-loan").onclick = () => {
       if (!confirm("این پرونده حذف شود؟")) return;
+      state.deletedIds = [...new Set([...(state.deletedIds || []), loan.id])];
       state.loans = state.loans.filter((x) => x.id !== loan.id);
       save();
       location.hash = "#/";
@@ -1088,6 +1334,7 @@
     view.querySelectorAll("[data-pay]").forEach((btn) => {
       btn.onclick = () => openPay(loan.id, Number(btn.dataset.pay));
     });
+    hydrateArvanPreviews(view);
   }
 
   function renderPayments(loan) {
@@ -1180,6 +1427,7 @@
         receipt,
         note: document.getElementById("p-note").value.trim(),
       });
+      touchLoan(loan);
       save();
       closeModal();
       toast("واریز ثبت شد");
@@ -1226,28 +1474,14 @@
     `;
   }
 
-  /* ---- backup ---- */
-  document.getElementById("btn-backup").onclick = () => {
-    const blob = new Blob([JSON.stringify(state.loans)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "qarz-backup.json";
-    a.click();
-  };
-  document.getElementById("btn-restore").onclick = () => document.getElementById("restore-file").click();
-  document.getElementById("restore-file").onchange = async (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
+  document.getElementById("btn-sync").onclick = async () => {
+    if (!arvanReady()) return toast("اول از «اتصال مشترک» وصل شوید");
     try {
-      const text = await f.text();
-      const data = JSON.parse(text);
-      if (!Array.isArray(data)) throw new Error("bad");
-      state.loans = data;
-      save();
-      toast("بازیابی شد");
+      const changed = await pullSharedState();
+      toast(changed ? "تغییرات همکار آمد" : "همین الان همگام هستید");
       route();
-    } catch {
-      toast("فایل پشتیبان نامعتبر است");
+    } catch (err) {
+      toast(err.message);
     }
   };
 
@@ -1255,5 +1489,6 @@
     if (!e.target.closest(".jdate")) closeAllJdates();
   });
 
+  startArvanLoop();
   route();
 })();

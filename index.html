@@ -6,7 +6,7 @@
   <title>صندوق قرض‌الحسنه</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/app.css?v=3" />
+  <link rel="stylesheet" href="assets/css/app.css?v=4" />
 </head>
 <body>
   <div class="app-shell">
@@ -19,10 +19,9 @@
         </div>
       </a>
       <div class="actions" style="margin:0">
-        <a class="btn btn-ghost" href="#/settings">آروان</a>
-        <button class="btn btn-ghost" id="btn-backup">خروجی پشتیبان</button>
-        <button class="btn btn-ghost" id="btn-restore">بازیابی</button>
-        <input type="file" id="restore-file" accept="application/json" hidden />
+        <span class="chip" id="sync-pill" hidden>همگام با آروان</span>
+        <button class="btn btn-ghost" id="btn-sync" hidden>بروزرسانی</button>
+        <a class="btn btn-ghost" href="#/settings">اتصال مشترک</a>
         <a class="btn btn-primary" href="#/new">ثبت وام جدید</a>
       </div>
     </header>
@@ -32,6 +31,6 @@
   <div class="modal-bg" id="modal"></div>
 
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-  <script src="assets/js/app.js?v=3"></script>
+  <script src="assets/js/app.js?v=4"></script>
 </body>
 </html>
