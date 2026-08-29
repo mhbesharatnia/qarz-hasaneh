@@ -417,16 +417,25 @@
     return rec;
   }
 
-  function filePreview(file) {
-    if (!file) return "";
+  function kv(label, value) {
+    const v = value == null || String(value).trim() === "" ? "—" : String(value);
+    return `<div class="kv"><span>${escapeHtml(label)}</span><b>${v}</b></div>`;
+  }
+
+  function filePreview(file, label) {
+    const title = label || (file && file.name) || "فایل";
+    const cap = `<span class="file-label">${escapeHtml(title)}</span>`;
+    if (!file) {
+      return `<div class="doc-slot">${cap}<div class="file-chip">ثبت نشده</div></div>`;
+    }
     if (file.type && file.type.startsWith("image/") && file.data) {
-      return `<img src="${file.data}" alt="${escapeHtml(file.name)}" />`;
+      return `<div class="doc-slot">${cap}<img class="zoomable" src="${file.data}" alt="${escapeHtml(title)}" data-zoom-src="${file.data}" data-zoom-title="${escapeHtml(title)}" /></div>`;
     }
     if (file.arvanKey) {
       const kind = file.type && file.type.startsWith("image/") ? "image" : "file";
-      return `<span class="file-chip arvan-preview" data-arvan-key="${escapeHtml(file.arvanKey)}" data-arvan-name="${escapeHtml(file.name || "")}" data-arvan-kind="${kind}">در حال دریافت از آروان…</span>`;
+      return `<div class="doc-slot">${cap}<span class="file-chip arvan-preview" data-arvan-key="${escapeHtml(file.arvanKey)}" data-arvan-name="${escapeHtml(file.name || title)}" data-arvan-kind="${kind}" data-zoom-title="${escapeHtml(title)}">در حال دریافت…</span></div>`;
     }
-    return `<div class="file-chip">${escapeHtml(file.name)}</div>`;
+    return `<div class="doc-slot">${cap}<div class="file-chip">${escapeHtml(file.name)}</div></div>`;
   }
 
   /* ---- routing ---- */
@@ -651,13 +660,16 @@
           }
           if (el.dataset.arvanKind === "image" || el.tagName === "IMG") {
             const img = document.createElement("img");
+            img.className = "zoomable";
             img.src = blobUrlCache[key];
-            img.alt = el.dataset.arvanName || "";
+            img.alt = el.dataset.zoomTitle || el.dataset.arvanName || "";
+            img.dataset.zoomSrc = blobUrlCache[key];
+            img.dataset.zoomTitle = el.dataset.zoomTitle || el.dataset.arvanName || "";
             el.replaceWith(img);
           } else {
             el.textContent = el.dataset.arvanName || "فایل آروان";
+            el.classList.add("zoomable");
             el.onclick = () => window.open(blobUrlCache[key], "_blank");
-            el.style.cursor = "pointer";
           }
         } catch {
           el.textContent = "دریافت فایل ناموفق";
@@ -1267,14 +1279,26 @@
   function personCard(title, p, docs, optionalDocs) {
     return `<div class="card">
       <h3 class="section-title">${title}</h3>
-      <p><b>${escapeHtml(titleOf(p))}</b> فرزند ${escapeHtml(p.fatherName || "—")} · کد ملی ${faDigits(p.nationalId || "—")}</p>
-      <p class="hint">تاریخ تولد: ${isoToJalali(p.birthDate)} · ${escapeHtml(p.job || "")} ${p.workplace ? "— " + escapeHtml(p.workplace) : ""}</p>
-      <p>نشانی: ${escapeHtml(p.address || "—")}</p>
-      <div class="phones">${phonesOf(p).map((x) => `<span class="chip">${faDigits(x)}</span>`).join("")}</div>
-      <div class="preview" style="margin-top:12px">
-        ${filePreview(docs.nationalCard)}${filePreview(docs.identityBook)}${filePreview(docs.extra)}
+      <div class="grid grid-2">
+        ${kv("عنوان", titleOf(p))}
+        ${kv("نام", p.firstName)}
+        ${kv("نام خانوادگی", p.lastName)}
+        ${kv("نام پدر", p.fatherName)}
+        ${kv("جنسیت", p.gender === "female" ? "خانم" : "آقا")}
+        ${kv("کد ملی", faDigits(p.nationalId || ""))}
+        ${kv("تاریخ تولد", isoToJalali(p.birthDate))}
+        ${kv("موبایل", faDigits(p.mobile || ""))}
+        ${kv("تلفن ثابت", faDigits(p.phone || ""))}
+        ${kv("شغل", p.job)}
+        ${kv("محل کار", p.workplace)}
       </div>
-      ${optionalDocs ? `<p class="hint">مدارک معرف اختیاری است.</p>` : ""}
+      ${kv("نشانی", p.address)}
+      <h4 class="docs-title">مدارک ${title}</h4>
+      <div class="preview">
+        ${filePreview(docs.nationalCard, "کارت ملی")}
+        ${filePreview(docs.identityBook, "شناسنامه")}
+        ${filePreview(docs.extra, optionalDocs ? "سایر مدارک (اختیاری)" : "سایر مدارک")}
+      </div>
     </div>`;
   }
 
@@ -1313,10 +1337,14 @@
           <button class="btn btn-danger" id="del-loan">حذف پرونده</button>
         </div>
         <div class="grid grid-4" style="margin:16px 0">
-          <div class="stat"><span>مبلغ وام</span><b>${toFa(loan.amount)}</b></div>
-          <div class="stat"><span>کارمزد</span><b>${toFa(loan.feePercent || 0)}٪</b><span>${toFa(loan.feeAmount || feeOf(loan.amount, loan.feePercent))} تومان</span></div>
-          <div class="stat"><span>تعداد اقساط</span><b>${toFa(loan.months)}</b></div>
-          <div class="stat"><span>ضمانت</span><b>${loan.guarantee.type === "check" ? "چک" : "سفته"} ${loan.guarantee.received ? "دریافت شد" : ""}</b></div>
+          <div class="stat"><span>مبلغ وام</span><b>${toFa(loan.amount)} تومان</b></div>
+          <div class="stat"><span>درصد کارمزد</span><b>${toFa(loan.feePercent || 0)}٪</b></div>
+          <div class="stat"><span>مبلغ کارمزد</span><b>${toFa(loan.feeAmount || feeOf(loan.amount, loan.feePercent))} تومان</b></div>
+          <div class="stat"><span>تعداد اقساط</span><b>${toFa(loan.months)} ماه</b></div>
+        </div>
+        <div class="grid grid-2" style="margin:0 0 16px">
+          ${kv("تاریخ سررسید قسط اول", isoToJalali(loan.firstDue))}
+          ${kv("تاریخ ثبت پرونده", isoToJalali((loan.createdAt || "").slice(0, 10)))}
         </div>
         <div class="grid grid-3">
           ${personCard("دریافت‌کننده", loan.recipient, loan.docs.recipient)}
@@ -1325,11 +1353,18 @@
         </div>
         <div class="card" style="margin-top:16px">
           <h3 class="section-title">نامه‌ها و ضمانت</h3>
-          <p>شماره سند ضمانت: ${faDigits(loan.guarantee.number || "—")} · ${escapeHtml(loan.guarantee.bank || "")}</p>
+          <div class="grid grid-2">
+            ${kv("نوع ضمانت", loan.guarantee.type === "check" ? "چک ضمانت" : "سفته ضمانت")}
+            ${kv("وضعیت دریافت ضمانت", loan.guarantee.received ? "دریافت شد" : "دریافت نشده")}
+            ${kv("شماره سند ضمانت", faDigits(loan.guarantee.number || ""))}
+            ${kv("بانک / محل صدور", loan.guarantee.bank)}
+          </div>
+          ${kv("توضیحات ضمانت", loan.guarantee.note)}
+          <h4 class="docs-title">اسکن نامه‌ها و سند ضمانت</h4>
           <div class="preview">
-            ${filePreview(loan.docs.introducerLetter)}
-            ${filePreview(loan.docs.guarantorLetter)}
-            ${filePreview(loan.docs.guaranteeScan)}
+            ${filePreview(loan.docs.introducerLetter, "نامه معرف")}
+            ${filePreview(loan.docs.guarantorLetter, "نامه تایید ضامن")}
+            ${filePreview(loan.docs.guaranteeScan, "اسکن چک / سفته ضمانت")}
           </div>
         </div>
         <div class="card" style="margin-top:16px">
@@ -1393,7 +1428,7 @@
             <td>${formatPayAt(p.at)}</td>
             <td>${escapeHtml(methodLabel(p.method))}</td>
             <td>${faDigits(p.tracking || "—")}</td>
-            <td>${p.receipt ? filePreview(p.receipt) : "—"}</td>
+            <td>${p.receipt ? filePreview(p.receipt, "رسید واریز") : "—"}</td>
             <td>${escapeHtml(p.note || "")}</td>
           </tr>`
         )
@@ -1525,7 +1560,36 @@
     }
   };
 
+  function openLightbox(src, title) {
+    const box = document.getElementById("lightbox");
+    if (!box || !src) return;
+    document.getElementById("lightbox-img").src = src;
+    document.getElementById("lightbox-title").textContent = title || "";
+    box.hidden = false;
+  }
+
+  function closeLightbox() {
+    const box = document.getElementById("lightbox");
+    if (!box) return;
+    box.hidden = true;
+    document.getElementById("lightbox-img").src = "";
+  }
+
+  document.getElementById("lightbox-close").onclick = closeLightbox;
+  document.getElementById("lightbox").onclick = (e) => {
+    if (e.target.id === "lightbox") closeLightbox();
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeLightbox();
+  });
+
   document.addEventListener("click", (e) => {
+    const zoom = e.target.closest(".zoomable");
+    if (zoom) {
+      e.preventDefault();
+      openLightbox(zoom.dataset.zoomSrc || zoom.src, zoom.dataset.zoomTitle || zoom.alt || "");
+      return;
+    }
     if (!e.target.closest(".jdate")) closeAllJdates();
   });
 
