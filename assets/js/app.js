@@ -411,7 +411,7 @@
         rec.arvanKey = await arvanPut(cfg, key, dataUrlToBlob(rec.data), rec.type || "application/octet-stream");
         delete rec.data;
       } catch (err) {
-        toast("آپلود به آروان ناموفق بود: " + (err.message || "خطای ناشناخته"));
+        toast("آپلود به آروان ناموفق بود: " + explainArvanError(err));
       }
     }
     return rec;
@@ -596,8 +596,43 @@
       "x-amz-date": amzDate,
     };
     if (isPut) headers["Content-Type"] = ctype;
-    const res = await fetch(url, { method, headers, body: isPut ? buf : undefined });
-    return res;
+    try {
+      return await fetch(url, { method, headers, body: isPut ? buf : undefined });
+    } catch (err) {
+      throw new Error(explainArvanError(err));
+    }
+  }
+
+  function appOrigins() {
+    const here = location.origin;
+    const extra = ["https://mhbesharatnia.github.io", "http://localhost:8080", "http://127.0.0.1:8080"];
+    return [...new Set([here, ...extra])];
+  }
+
+  function corsConfigText() {
+    return JSON.stringify(
+      {
+        CORSRules: [
+          {
+            AllowedOrigins: appOrigins(),
+            AllowedMethods: ["GET", "PUT", "HEAD", "POST"],
+            AllowedHeaders: ["*"],
+            ExposeHeaders: ["ETag", "x-amz-request-id", "x-amz-id-2"],
+            MaxAgeSeconds: 3600,
+          },
+        ],
+      },
+      null,
+      2
+    );
+  }
+
+  function explainArvanError(err) {
+    const msg = String((err && err.message) || err || "");
+    if (/Failed to fetch|NetworkError|ERR_FAILED|CORS|access control/i.test(msg)) {
+      return "مرورگر درخواست را به‌خاطر CORS بست. در پنل آروان روی باکت، CORS را طبق نمونهٔ همین صفحه ذخیره کنید. باکت خصوصی می‌ماند.";
+    }
+    return msg;
   }
 
   async function arvanPut(cfg, key, blob, contentType) {
@@ -664,7 +699,7 @@
     if (!arvanReady(cfg)) return;
     clearTimeout(arvanPushTimer);
     arvanPushTimer = setTimeout(() => {
-      pushSharedState(cfg).catch((err) => toast("همگام‌سازی آروان: " + err.message));
+      pushSharedState(cfg).catch((err) => toast("همگام‌سازی آروان: " + explainArvanError(err)));
     }, 600);
   }
 
@@ -788,7 +823,7 @@
       const changed = await pullSharedState(next);
       if (!changed && state.loans.length) await pushSharedState(next);
     } catch (err) {
-      toast(err.message);
+      toast(explainArvanError(err));
     }
     route();
   }
@@ -813,7 +848,15 @@
           <div class="field"><label>Secret Key</label><input id="a-sk" type="password" value="${escapeHtml(c.secretKey)}" autocomplete="off" /></div>
         </div>
         <p class="hint">Endpoint را کامل با <code>https://</code> بگذارید، مثلاً <code>https://s3.ir-thr-at1.arvanstorage.ir</code>. اگر فقط نام هاست را بگذارید، خودش https اضافه می‌شود. اگر امضا رد شد Region را <code>us-east-1</code> کنید.</p>
-        <p class="hint">در CORS باکت، origin همین صفحه را با متدهای GET و PUT و هدر <code>*</code> مجاز کنید. باکت را public نکنید.</p>
+        <div class="alert alert-gold">
+          <h3>حتماً CORS باکت را یک‌بار تنظیم کنید</h3>
+          <p>خطای فعلی از خصوصی بودن باکت نیست؛ مرورگر بدون هدر CORS اجازهٔ درخواست از GitHub Pages را نمی‌دهد. باکت را public نکنید.</p>
+          <p>در پنل آروان: آبجکت استوریج → باکت <b>${escapeHtml(c.bucket || "…")}</b> → تنظیمات CORS → ذخیرهٔ همین JSON:</p>
+          <textarea id="a-cors" readonly rows="14" style="font-family:monospace;font-size:0.78rem;direction:ltr;text-align:left">${escapeHtml(corsConfigText())}</textarea>
+          <div class="actions">
+            <button type="button" class="btn btn-sm btn-gold" id="a-cors-copy">کپی JSON مربوط به CORS</button>
+          </div>
+        </div>
         <div class="actions">
           <button class="btn btn-primary" id="a-save">ذخیره و همگام‌سازی</button>
           <button class="btn btn-gold" id="a-export">خروجی اتصال برای همکار</button>
@@ -841,7 +884,7 @@
           document.getElementById("a-status").textContent = "وصل شدید. خروجی اتصال را به همکارتان بدهید.";
         }
       } catch (err) {
-        toast(err.message);
+        toast(explainArvanError(err));
       }
       refreshSyncPill();
     };
@@ -849,6 +892,15 @@
       const next = readSettingsForm();
       localStorage.setItem(ARVAN_KEY, JSON.stringify(next));
       exportShareFile(next);
+    };
+    document.getElementById("a-cors-copy").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById("a-cors").value);
+        toast("JSON مربوط به CORS کپی شد");
+      } catch {
+        document.getElementById("a-cors").select();
+        toast("متن را دستی کپی کنید");
+      }
     };
     document.getElementById("a-import").onclick = () => document.getElementById("a-import-file").click();
     document.getElementById("a-import-file").onchange = async (e) => {
@@ -1511,7 +1563,7 @@
       toast(changed ? "تغییرات همکار آمد" : "همین الان همگام هستید");
       route();
     } catch (err) {
-      toast(err.message);
+      toast(explainArvanError(err));
     }
   };
 
