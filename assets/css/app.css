@@ -269,6 +269,7 @@ textarea { min-height: 88px; resize: vertical; }
   object-fit: cover;
 }
 .file-chip { padding: 8px 10px; background: var(--gold-soft); font-size: 0.8rem; }
+.file-open { cursor: pointer; }
 .kv { margin-bottom: 12px; }
 .kv > span { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 2px; }
 .kv > b { font-weight: 700; word-break: break-word; }

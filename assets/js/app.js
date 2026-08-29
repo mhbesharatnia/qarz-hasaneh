@@ -435,6 +435,9 @@
       const kind = file.type && file.type.startsWith("image/") ? "image" : "file";
       return `<div class="doc-slot">${cap}<span class="file-chip arvan-preview" data-arvan-key="${escapeHtml(file.arvanKey)}" data-arvan-name="${escapeHtml(file.name || title)}" data-arvan-kind="${kind}" data-zoom-title="${escapeHtml(title)}">در حال دریافت…</span></div>`;
     }
+    if (file.data) {
+      return `<div class="doc-slot">${cap}<span class="file-chip file-open" data-open-src="${file.data}">${escapeHtml(file.name || title)} — باز کردن</span></div>`;
+    }
     return `<div class="doc-slot">${cap}<div class="file-chip">${escapeHtml(file.name)}</div></div>`;
   }
 
@@ -667,9 +670,9 @@
             img.dataset.zoomTitle = el.dataset.zoomTitle || el.dataset.arvanName || "";
             el.replaceWith(img);
           } else {
-            el.textContent = el.dataset.arvanName || "فایل آروان";
-            el.classList.add("zoomable");
-            el.onclick = () => window.open(blobUrlCache[key], "_blank");
+            el.textContent = (el.dataset.arvanName || "فایل") + " — باز کردن";
+            el.classList.add("file-open");
+            el.dataset.openSrc = blobUrlCache[key];
           }
         } catch {
           el.textContent = "دریافت فایل ناموفق";
@@ -1584,6 +1587,12 @@
   });
 
   document.addEventListener("click", (e) => {
+    const openFile = e.target.closest("[data-open-src]");
+    if (openFile) {
+      e.preventDefault();
+      window.open(openFile.dataset.openSrc, "_blank", "noopener");
+      return;
+    }
     const zoom = e.target.closest(".zoomable");
     if (zoom) {
       e.preventDefault();
