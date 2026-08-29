@@ -411,7 +411,7 @@
         rec.arvanKey = await arvanPut(cfg, key, dataUrlToBlob(rec.data), rec.type || "application/octet-stream");
         delete rec.data;
       } catch (err) {
-        toast("آپلود به آروان ناموفق بود؛ فایل در مرورگر ماند");
+        toast("آپلود به آروان ناموفق بود: " + (err.message || "خطای ناشناخته"));
       }
     }
     return rec;
@@ -464,16 +464,37 @@
     };
   }
 
+  function normalizeEndpoint(raw) {
+    let s = String(raw || "")
+      .trim()
+      .replace(/^[\u200e\u200f]+|[\u200e\u200f]+$/g, "")
+      .replace(/\/+$/, "");
+    if (!s) return "";
+    if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+    try {
+      const u = new URL(s);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+      return u.origin;
+    } catch {
+      return "";
+    }
+  }
+
   function arvanCfg() {
     try {
-      return { ...arvanDefaults(), ...JSON.parse(localStorage.getItem(ARVAN_KEY) || "{}") };
+      const cfg = { ...arvanDefaults(), ...JSON.parse(localStorage.getItem(ARVAN_KEY) || "{}") };
+      cfg.endpoint = normalizeEndpoint(cfg.endpoint) || arvanDefaults().endpoint;
+      cfg.region = String(cfg.region || "ir-thr-at1").trim() || "ir-thr-at1";
+      cfg.bucket = String(cfg.bucket || "").trim();
+      cfg.prefix = String(cfg.prefix || "qarz-fund").trim() || "qarz-fund";
+      return cfg;
     } catch {
       return arvanDefaults();
     }
   }
 
   function arvanReady(cfg = arvanCfg()) {
-    return !!(cfg.enabled && cfg.endpoint && cfg.bucket && cfg.accessKey && cfg.secretKey);
+    return !!(cfg.enabled && normalizeEndpoint(cfg.endpoint) && cfg.bucket && cfg.accessKey && cfg.secretKey);
   }
 
   function dataKey(cfg = arvanCfg()) {
@@ -546,9 +567,13 @@
   }
 
   async function arvanRequest(cfg, method, key, blob, contentType) {
-    const host = new URL(cfg.endpoint).host;
-    const path = `/${cfg.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
-    const url = `${cfg.endpoint.replace(/\/$/, "")}${path}`;
+    const endpoint = normalizeEndpoint(cfg.endpoint);
+    if (!endpoint) {
+      throw new Error("آدرس Endpoint نامعتبر است. باید شبیه https://s3.ir-thr-at1.arvanstorage.ir باشد");
+    }
+    const host = new URL(endpoint).host;
+    const path = `/${cfg.bucket}/${String(key).split("/").filter(Boolean).map(encodeURIComponent).join("/")}`;
+    const url = endpoint + path;
     const { amzDate, dateStamp } = amzNow();
     const isPut = method === "PUT";
     const buf = isPut ? await blob.arrayBuffer() : null;
@@ -715,7 +740,7 @@
   function readSettingsForm() {
     return {
       enabled: document.getElementById("a-on").checked,
-      endpoint: document.getElementById("a-ep").value.trim().replace(/\/$/, ""),
+      endpoint: normalizeEndpoint(document.getElementById("a-ep").value) || document.getElementById("a-ep").value.trim(),
       region: document.getElementById("a-rg").value.trim() || "ir-thr-at1",
       bucket: document.getElementById("a-bk").value.trim(),
       prefix: document.getElementById("a-px").value.trim() || "qarz-fund",
@@ -787,7 +812,7 @@
           <div class="field"><label>Access Key</label><input id="a-ak" value="${escapeHtml(c.accessKey)}" autocomplete="off" /></div>
           <div class="field"><label>Secret Key</label><input id="a-sk" type="password" value="${escapeHtml(c.secretKey)}" autocomplete="off" /></div>
         </div>
-        <p class="hint">نمونه Endpoint تهران: <code>https://s3.ir-thr-at1.arvanstorage.ir</code> — اگر امضا رد شد Region را <code>us-east-1</code> بگذارید.</p>
+        <p class="hint">Endpoint را کامل با <code>https://</code> بگذارید، مثلاً <code>https://s3.ir-thr-at1.arvanstorage.ir</code>. اگر فقط نام هاست را بگذارید، خودش https اضافه می‌شود. اگر امضا رد شد Region را <code>us-east-1</code> کنید.</p>
         <p class="hint">در CORS باکت، origin همین صفحه را با متدهای GET و PUT و هدر <code>*</code> مجاز کنید. باکت را public نکنید.</p>
         <div class="actions">
           <button class="btn btn-primary" id="a-save">ذخیره و همگام‌سازی</button>
@@ -801,6 +826,11 @@
     `;
     document.getElementById("a-save").onclick = async () => {
       const next = readSettingsForm();
+      if (!normalizeEndpoint(next.endpoint)) {
+        toast("Endpoint نامعتبر است. مثال: https://s3.ir-thr-at1.arvanstorage.ir");
+        return;
+      }
+      next.endpoint = normalizeEndpoint(next.endpoint);
       localStorage.setItem(ARVAN_KEY, JSON.stringify(next));
       toast("تنظیمات ذخیره شد");
       startArvanLoop();
