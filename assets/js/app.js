@@ -32,6 +32,7 @@
     lastSeenRev: 0,
     draft: null,
     step: 0,
+    editId: null,
   };
 
   function loadStore() {
@@ -283,6 +284,15 @@
     const dim = jalaliMonthLength(jy, jm);
     const start = weekdayIran(jy, jm, 1);
     const JDAYS = ["ش", "ی", "د", "س", "چ", "پ", "ج"];
+    const yearFrom = now.jy - 100;
+    const yearTo = now.jy + 10;
+    let years = "";
+    for (let y = yearTo; y >= yearFrom; y--) {
+      years += `<option value="${y}" ${y === jy ? "selected" : ""}>${faDigits(y)}</option>`;
+    }
+    const months = JMONTHS.map(
+      (name, i) => `<option value="${i + 1}" ${i + 1 === jm ? "selected" : ""}>${name}</option>`
+    ).join("");
     let days = "";
     for (let i = 0; i < start; i++) days += `<button type="button" class="mute" disabled></button>`;
     for (let d = 1; d <= dim; d++) {
@@ -291,9 +301,12 @@
     }
     cal.innerHTML = `
       <div class="jcal-head">
-        <button type="button" class="jcal-nav" data-jnav="-1">‹</button>
-        <b>${JMONTHS[jm - 1]} ${faDigits(jy)}</b>
-        <button type="button" class="jcal-nav" data-jnav="1">›</button>
+        <button type="button" class="jcal-nav" data-jnav="-1" title="ماه قبل">‹</button>
+        <div class="jcal-pickers">
+          <select class="jcal-month" data-jmonth aria-label="ماه">${months}</select>
+          <select class="jcal-year" data-jyear aria-label="سال">${years}</select>
+        </div>
+        <button type="button" class="jcal-nav" data-jnav="1" title="ماه بعد">›</button>
       </div>
       <div class="jcal-week">${JDAYS.map((d) => `<span>${d}</span>`).join("")}</div>
       <div class="jcal-days">${days}</div>
@@ -325,8 +338,22 @@
         paintJcal(wrap);
         wrap.classList.add("open");
       };
-      wrap.querySelector(".jcal").onclick = (e) => {
+      const cal = wrap.querySelector(".jcal");
+      cal.onchange = (e) => {
         e.stopPropagation();
+        if (e.target.matches("[data-jyear]")) {
+          wrap._jy = Number(e.target.value);
+          paintJcal(wrap);
+          return;
+        }
+        if (e.target.matches("[data-jmonth]")) {
+          wrap._jm = Number(e.target.value);
+          paintJcal(wrap);
+        }
+      };
+      cal.onclick = (e) => {
+        e.stopPropagation();
+        if (e.target.closest("select")) return;
         const nav = e.target.closest("[data-jnav]");
         if (nav) {
           let m = wrap._jm + Number(nav.dataset.jnav);
@@ -446,7 +473,14 @@
     const hash = location.hash.replace(/^#/, "") || "/";
     const parts = hash.split("/").filter(Boolean);
     if (parts[0] === "settings") renderSettings();
-    else if (parts[0] === "new") renderNew();
+    else if (parts[0] === "new") {
+      if (state.editId) {
+        state.editId = null;
+        state.draft = null;
+        state.step = 0;
+      }
+      renderNew();
+    } else if (parts[0] === "edit" && parts[1]) startEdit(parts[1]);
     else if (parts[0] === "loan" && parts[1]) renderLoan(parts[1]);
     else if (parts[0] === "letter" && parts[1]) renderLetter(parts[1]);
     else renderHome();
@@ -1139,6 +1173,7 @@
     if (!state.draft) state.draft = newDraft();
     const d = state.draft;
     const s = state.step;
+    const editing = !!state.editId;
     let body = "";
     if (s === 0) {
       body = `<h2 class="section-title">مشخصات دریافت‌کننده وام</h2>${personFields("recipient", d.recipient, true)}`;
@@ -1196,22 +1231,27 @@
           <div class="field"><label>کارمزد (درصد)</label><input type="number" min="0" step="0.1" data-loan="feePercent" value="${escapeHtml(d.feePercent)}" /></div>
           <div class="field"><label>تاریخ سررسید قسط اول (شمسی)</label>${jdateSelects(d.firstDue, `data-loan="firstDue"`)}</div>
         </div>
-        <p class="hint">تاریخ‌ها شمسی است. با تعیین مبلغ و تعداد ماه، سررسید هر قسط ماه‌به‌ماه شمسی محاسبه می‌شود. کارمزد پیش‌فرض صفر است و جدا از اصل اقساط نمایش داده می‌شود.</p>
+        <p class="hint">تاریخ‌ها شمسی است. با تعیین مبلغ و تعداد ماه، سررسید هر قسط ماه‌به‌ماه شمسی محاسبه می‌شود. کارمزد پیش‌فرض صفر است و جدا از اصل اقساط نمایش داده می‌شود.${editing ? " در ویرایش، اگر مبلغ یا تعداد ماه یا سررسید اول عوض شود جدول اقساط از نو ساخته می‌شود و واریزهای قبلی روی همان شماره قسط حفظ می‌مانند." : ""}</p>
         <div id="inst-preview">${previewTable()}</div>
       `;
     }
 
+    const cancelHref = editing ? `#/loan/${state.editId}` : "#/";
+    const submitLabel = s < STEPS.length - 1 ? "ادامه" : editing ? "ذخیره تغییرات" : "ثبت پرونده";
+
     view.innerHTML = `
       <div class="stepper">${STEPS.map((t, i) => `<div class="step ${i === s ? "on" : ""}">${faDigits(i + 1)}. ${t}</div>`).join("")}</div>
+      ${editing ? `<div class="alert alert-gold"><p>در حال ویرایش پرونده — پس از ذخیره به همان پرونده برمی‌گردید.</p></div>` : ""}
       <form class="card" id="loan-form">${body}
         <div class="actions">
           ${s > 0 ? `<button type="button" class="btn btn-ghost" id="prev">قبلی</button>` : ""}
-          ${s < STEPS.length - 1 ? `<button type="submit" class="btn btn-primary">ادامه</button>` : `<button type="submit" class="btn btn-primary">ثبت پرونده</button>`}
-          <a class="btn btn-ghost" href="#/">انصراف</a>
+          <button type="submit" class="btn btn-primary">${submitLabel}</button>
+          <a class="btn btn-ghost" href="${cancelHref}">انصراف</a>
         </div>
       </form>
     `;
     bindDraft(view);
+    hydrateArvanPreviews(view);
     const prev = document.getElementById("prev");
     if (prev)
       prev.onclick = () => {
@@ -1235,6 +1275,42 @@
     };
   }
 
+  function cloneDeep(v) {
+    return JSON.parse(JSON.stringify(v));
+  }
+
+  function startEdit(id) {
+    const loan = state.loans.find((l) => l.id === id);
+    if (!loan) {
+      view.innerHTML = `<div class="card empty">پرونده پیدا نشد. <a href="#/">بازگشت</a></div>`;
+      return;
+    }
+    if (state.editId !== id || !state.draft) {
+      state.editId = id;
+      state.step = 0;
+      state.draft = {
+        recipient: { ...emptyPerson(), ...loan.recipient },
+        introducer: { ...emptyPerson(), ...loan.introducer },
+        guarantor: { ...emptyPerson(), ...loan.guarantor },
+        docs: cloneDeep(loan.docs || { recipient: emptyDocs(), introducer: emptyDocs(), guarantor: emptyDocs() }),
+        guarantee: { type: "check", received: false, number: "", bank: "", note: "", ...(loan.guarantee || {}) },
+        amount: String(loan.amount ?? ""),
+        months: String(loan.months ?? ""),
+        feePercent: String(loan.feePercent ?? 0),
+        firstDue: loan.firstDue || todayISO(),
+      };
+    }
+    renderNew();
+  }
+
+  function mergeInstallments(prevInst, nextInst) {
+    const byN = new Map((prevInst || []).map((i) => [i.n, i]));
+    return nextInst.map((row) => {
+      const old = byN.get(row.n);
+      return old && old.payments && old.payments.length ? { ...row, payments: cloneDeep(old.payments) } : row;
+    });
+  }
+
   function commitLoan() {
     const d = state.draft;
     const amount = Number(d.amount);
@@ -1254,6 +1330,47 @@
       return;
     }
     const feePercent = Number(d.feePercent) || 0;
+    const editId = state.editId;
+
+    if (editId) {
+      const idx = state.loans.findIndex((l) => l.id === editId);
+      if (idx < 0) {
+        toast("پرونده پیدا نشد");
+        return;
+      }
+      const prev = state.loans[idx];
+      const scheduleChanged =
+        Number(prev.amount) !== amount ||
+        Number(prev.months) !== months ||
+        (prev.firstDue || "") !== (d.firstDue || "");
+      const installments = scheduleChanged
+        ? mergeInstallments(prev.installments, buildInstallments(amount, months, d.firstDue))
+        : prev.installments;
+      const loan = {
+        ...prev,
+        recipient: { ...d.recipient },
+        introducer: { ...d.introducer },
+        guarantor: { ...d.guarantor },
+        docs: d.docs,
+        guarantee: { ...d.guarantee },
+        amount,
+        feePercent,
+        feeAmount: feeOf(amount, feePercent),
+        months,
+        firstDue: d.firstDue,
+        installments,
+      };
+      touchLoan(loan);
+      state.loans[idx] = loan;
+      save();
+      state.draft = null;
+      state.step = 0;
+      state.editId = null;
+      toast("تغییرات ذخیره شد");
+      location.hash = "#/loan/" + loan.id;
+      return;
+    }
+
     const loan = {
       id: uid(),
       createdAt: new Date().toISOString(),
@@ -1306,6 +1423,11 @@
   }
 
   function renderLoan(id) {
+    if (state.editId) {
+      state.editId = null;
+      state.draft = null;
+      state.step = 0;
+    }
     const loan = state.loans.find((l) => l.id === id);
     if (!loan) {
       view.innerHTML = `<div class="card empty">پرونده پیدا نشد. <a href="#/">بازگشت</a></div>`;
@@ -1335,6 +1457,7 @@
         }
         <div class="actions" style="margin-top:0">
           <a class="btn btn-ghost" href="#/">بازگشت</a>
+          <a class="btn btn-primary" href="#/edit/${loan.id}">ویرایش پرونده</a>
           <button class="btn btn-gold" id="excel-loan">خروجی اکسل اقساط</button>
           ${settled ? `<a class="btn btn-primary" href="#/letter/${loan.id}">نامه تسویه</a>` : ""}
           <button class="btn btn-danger" id="del-loan">حذف پرونده</button>
